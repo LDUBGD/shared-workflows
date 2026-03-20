@@ -1,0 +1,274 @@
+name: Shared CI/CD Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      environment_name:
+        description: 'Назва середовища (наприклад, production, development)'
+        required: false
+        type: string
+        default: 'production'
+      deploy:
+        description: 'Чи запускати деплой (true/false)'
+        required: false
+        type: boolean
+        default: true
+      use_ansible:
+        description: 'Чи використовувати Ansible для деплою (якщо false - використовує bash скрипти/docker-compose)'
+        required: false
+        type: boolean
+        default: false
+      build_and_push_docker:
+        description: 'Чи будувати і пушити Docker-образ у GHCR'
+        required: false
+        type: boolean
+        default: false
+      docker_image_name:
+        description: 'Назва Docker-образу (наприклад, my-app)'
+        required: false
+        type: string
+    secrets:
+      TS_OAUTH_CLIENT_ID:
+        required: true
+      TS_OAUTH_SECRET:
+        required: true
+      SERVER_HOST:
+        required: true
+      SERVER_USER:
+        required: true
+      SERVER_SSH_KEY:
+        required: true
+      SSH_HOST_KEY_PUB:
+        required: true
+      DEPLOY_PROJECT_DIR:
+        required: true
+      # Додаткові секрети для Ansible (необов'язкові, якщо use_ansible = false)
+      INFRA_REPO_PAT:
+        required: false
+      ANSIBLE_VAULT_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+  packages: write # Додано write для пушу в GitHub Container Registry
+  pull-requests: read
+
+jobs:
+  ci-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: ci-checks-${{ github.ref }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      packages: write # Додано write
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          scandir: ./scripts
+
+      - name: Run Hadolint on Dockerfiles
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find . -type f \( -name 'Dockerfile' -o -name '*.Dockerfile' \))
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No Dockerfiles found, skipping hadolint"
+            exit 0
+          fi
+          for file in "${files[@]}"; do
+            echo "Linting $file"
+            docker run --rm -i hadolint/hadolint:latest hadolint - < "$file"
+          done
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          output: trivy-report.txt
+          exit-code: '1'
+
+      - name: Print Trivy report
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f trivy-report.txt ]]; then
+            echo "Trivy report:"
+            cat trivy-report.txt
+          else
+            echo "Trivy did not generate a report file."
+          fi
+
+      - name: Upload Trivy report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report-${{ github.run_id }}
+          path: trivy-report.txt
+          if-no-files-found: warn
+
+      - name: Prepare env file for compose validation
+        run: cp .env.example .env
+
+      - name: Validate compose config
+        run: docker compose -f docker-compose.yaml config --quiet
+
+      - name: Check ports policy
+        run: bash ./scripts/check-ports-policy.sh docker-compose.yaml
+
+      - name: Dependency review
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+
+      - name: Log in to GitHub Container Registry
+        if: inputs.build_and_push_docker == true
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }} # Використовує вбудований токен GitHub
+
+      - name: Build and push Docker image
+        if: inputs.build_and_push_docker == true
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' }} # Пушити тільки якщо це не PR
+          tags: ghcr.io/${{ github.repository_owner }}/${{ inputs.docker_image_name }}:${{ github.sha }},ghcr.io/${{ github.repository_owner }}/${{ inputs.docker_image_name }}:latest
+
+  cd-deploy:
+    name: cd-deploy
+    needs: ci-checks
+    if: |
+      inputs.deploy == true && 
+      github.event_name == 'push' && 
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: cd-deploy-${{ inputs.environment_name }}
+      cancel-in-progress: false
+    environment: ${{ inputs.environment_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SSH_HOST_KEY_PUB: ${{ secrets.SSH_HOST_KEY_PUB }}
+          DEPLOY_PROJECT_DIR: ${{ secrets.DEPLOY_PROJECT_DIR }}
+        run: |
+          set -euo pipefail
+          for key in TS_OAUTH_CLIENT_ID TS_OAUTH_SECRET SERVER_HOST SERVER_USER SERVER_SSH_KEY SSH_HOST_KEY_PUB DEPLOY_PROJECT_DIR; do
+            if [[ -z "${!key:-}" ]]; then
+              echo "ERROR: required secret is missing: $key"
+              exit 1
+            fi
+          done
+
+      # Налаштування SSH однакове для Docker і для Ansible
+      - name: Configure SSH key and known_hosts
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SSH_HOST_KEY_PUB: ${{ secrets.SSH_HOST_KEY_PUB }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          umask 177
+          printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s %s\n' "$SERVER_HOST" "$SSH_HOST_KEY_PUB" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+      # Підключення до Tailscale однакове для обох
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      # --- ЛОГІКА БЕЗ ANSIBLE (DOCKER COMPOSE) ---
+      - name: Deploy on remote host (Docker Compose)
+        if: inputs.use_ansible == false
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          DEPLOY_PROJECT_DIR: ${{ secrets.DEPLOY_PROJECT_DIR }}
+          DEPLOY_REF: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          target_path="${DEPLOY_PROJECT_DIR}"
+
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
+            "${SERVER_USER}@${SERVER_HOST}" \
+            "DEPLOY_REF='${DEPLOY_REF}' DEPLOY_PROJECT_DIR='${target_path}' bash -s" <<'EOF'
+          set -euo pipefail
+          if [[ -z "${DEPLOY_PROJECT_DIR:-}" ]]; then
+            echo "ERROR: DEPLOY_PROJECT_DIR is empty"
+            exit 1
+          fi
+          if [[ ! -d "$DEPLOY_PROJECT_DIR/.git" ]]; then
+            echo "ERROR: DEPLOY_PROJECT_DIR is not a git repository: $DEPLOY_PROJECT_DIR"
+            exit 1
+          fi
+          cd "$DEPLOY_PROJECT_DIR"
+          git fetch --all --prune
+          git checkout "$DEPLOY_REF"
+          bash ./scripts/verify-env.sh .env
+          bash ./scripts/init-volumes.sh .env
+          docker compose -f docker-compose.yaml up -d --remove-orphans
+          bash ./scripts/apply-matomo-config.sh .env
+          docker compose -f docker-compose.yaml ps
+          EOF
+
+      # --- ЛОГІКА З ANSIBLE ---
+      - name: Checkout Ansible Repo
+        if: inputs.use_ansible == true
+        uses: actions/checkout@v4
+        with:
+          repository: 'YOUR_ORGANIZATION/ansible-infrastructure'
+          token: ${{ secrets.INFRA_REPO_PAT }}
+          path: 'infra'
+
+      - name: Deploy with Ansible
+        if: inputs.use_ansible == true
+        env:
+          ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+          APP_VERSION: ${{ github.sha }} 
+        run: |
+          echo "Встановлюємо Ansible..."
+          sudo apt update && sudo apt install -y ansible
+          
+          echo "$ANSIBLE_VAULT_PASSWORD" > vault_pass.txt
+          
+          echo "Запускаємо Ansible плейбук для ${{ inputs.environment_name }}..."
+          ansible-playbook -i infra/ansible/inventories/${{ inputs.environment_name }} \
+                           infra/ansible/deploy-app.yml \
+                           --vault-password-file vault_pass.txt \
+                           -e "app_version=$APP_VERSION deploy_dir=${{ secrets.DEPLOY_PROJECT_DIR }}"
+                           
+          rm vault_pass.txt
