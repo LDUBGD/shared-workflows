@@ -212,6 +212,7 @@ jobs:
           for key in SERVER_HOST SERVER_USER SERVER_SSH_KEY SSH_HOST_KEY_PUB DEPLOY_PROJECT_DIR; do
             if [[ -z "${!key:-}" ]]; then
               echo "ERROR: required secret is missing: $key"
+              echo "HINT: check repo/environment secrets and organization secret visibility for this repository"
               exit 1
             fi
           done
