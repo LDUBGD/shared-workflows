@@ -27,6 +27,11 @@ on:
         description: 'Назва Docker-образу (наприклад, my-app)'
         required: false
         type: string
+      deploy_project_dir:
+        description: 'Цільова директорія на сервері для деплою (наприклад, /opt/apps/dev-my-app)'
+        required: false
+        type: string
+        default: ''
     secrets:
       TS_OAUTH_CLIENT_ID:
         required: false
@@ -39,8 +44,6 @@ on:
       SERVER_SSH_KEY:
         required: false
       SSH_HOST_KEY_PUB:
-        required: false
-      DEPLOY_PROJECT_DIR:
         required: false
       INFRA_REPO_PAT:
         required: false
@@ -122,7 +125,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: trivy-report-${{ github.run_id }}
+          name: trivy-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.environment_name }}
           path: trivy-report.txt
           if-no-files-found: warn
 
@@ -197,15 +200,19 @@ jobs:
           SERVER_USER: ${{ secrets.SERVER_USER }}
           SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
           SSH_HOST_KEY_PUB: ${{ secrets.SSH_HOST_KEY_PUB }}
-          DEPLOY_PROJECT_DIR: ${{ secrets.DEPLOY_PROJECT_DIR }}
+          DEPLOY_PROJECT_DIR: ${{ inputs.deploy_project_dir }}
         run: |
           set -euo pipefail
-          for key in TS_OAUTH_CLIENT_ID TS_OAUTH_SECRET SERVER_HOST SERVER_USER SERVER_SSH_KEY SSH_HOST_KEY_PUB DEPLOY_PROJECT_DIR; do
+          for key in TS_OAUTH_CLIENT_ID TS_OAUTH_SECRET SERVER_HOST SERVER_USER SERVER_SSH_KEY SSH_HOST_KEY_PUB; do
             if [[ -z "${!key:-}" ]]; then
               echo "ERROR: required secret is missing: $key"
               exit 1
             fi
           done
+          if [[ -z "${DEPLOY_PROJECT_DIR:-}" ]]; then
+            echo "ERROR: required input is missing: deploy_project_dir"
+            exit 1
+          fi
 
       - name: Configure SSH key and known_hosts
         env:
@@ -233,7 +240,7 @@ jobs:
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
-          DEPLOY_PROJECT_DIR: ${{ secrets.DEPLOY_PROJECT_DIR }}
+          DEPLOY_PROJECT_DIR: ${{ inputs.deploy_project_dir }}
           DEPLOY_REF: ${{ github.sha }}
         run: |
           set -euo pipefail
@@ -302,6 +309,6 @@ jobs:
           ansible-playbook -i infra/ansible/inventories/${{ inputs.environment_name }} \
                            infra/ansible/deploy-app.yml \
                            --vault-password-file vault_pass.txt \
-                           -e "app_version=$APP_VERSION deploy_dir=${{ secrets.DEPLOY_PROJECT_DIR }}"
+                           -e "app_version=$APP_VERSION deploy_dir=${{ inputs.deploy_project_dir }}"
 
           rm vault_pass.txt
