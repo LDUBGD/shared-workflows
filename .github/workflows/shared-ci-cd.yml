@@ -280,7 +280,8 @@ jobs:
           [[ -f "./scripts/verify-env.sh" ]] && bash ./scripts/verify-env.sh .env
           [[ -f "./scripts/init-volumes.sh" ]] && bash ./scripts/init-volumes.sh .env
 
-          docker compose -f "$compose_file" up -d --remove-orphans
+          docker compose -f "$compose_file" pull --quiet
+          docker compose -f "$compose_file" up -d --remove-orphans --force-recreate
 
           # Опціональні пост-деплой скрипти
           [[ -f "./scripts/apply-matomo-config.sh" ]] && bash ./scripts/apply-matomo-config.sh .env
