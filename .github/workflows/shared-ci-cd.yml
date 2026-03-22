@@ -86,7 +86,7 @@ jobs:
           fi
           for file in "${files[@]}"; do
             echo "Linting $file"
-            docker run --rm -i hadolint/hadolint:v2 hadolint - < "$file"
+            docker run --rm -i hadolint/hadolint:latest hadolint - < "$file"
           done
 
       - name: Run Gitleaks
@@ -97,7 +97,7 @@ jobs:
           fi
           docker run --rm \
             -v "${{ github.workspace }}:/repo" \
-            zricethezav/gitleaks:v8 \
+            zricethezav/gitleaks:latest \
             detect --source=/repo --redact -v --exit-code=1 $config_arg
 
       - name: Run Trivy filesystem scan
