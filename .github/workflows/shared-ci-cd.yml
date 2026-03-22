@@ -29,20 +29,19 @@ on:
         type: string
     secrets:
       TS_OAUTH_CLIENT_ID:
-        required: true
+        required: false
       TS_OAUTH_SECRET:
-        required: true
+        required: false
       SERVER_HOST:
-        required: true
+        required: false
       SERVER_USER:
-        required: true
+        required: false
       SERVER_SSH_KEY:
-        required: true
+        required: false
       SSH_HOST_KEY_PUB:
-        required: true
+        required: false
       DEPLOY_PROJECT_DIR:
-        required: true
-      # Додаткові секрети для Ansible (необов'язкові, якщо use_ansible = false)
+        required: false
       INFRA_REPO_PAT:
         required: false
       ANSIBLE_VAULT_PASSWORD:
