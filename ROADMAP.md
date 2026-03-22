@@ -60,7 +60,7 @@ SSH_HOST_KEY_PUB
 
 Для КОЖНОГО знайденого репозиторію необхідно виконати :
 
-[ ] 3.1. Створення середовища production (поки пропускаємо):
+[х] 3.1. ✅ Створення середовища production (виконано):
 
 Створити Environment з назвою production.
 
@@ -83,38 +83,53 @@ SSH_HOST_KEY_PUB
 
 [ ] 4.2. Створення нового пайплайну: Створити новий файл .github/workflows/main.yml.
 
+Логіка запуску середовищ (оновлено):
+
+- development:
+  - PR у гілку dev: запускаються тільки CI-перевірки.
+  - Push (merge) у гілку dev: запускаються CI-перевірки + деплой у development.
+
+- production:
+  - PR у гілку main (включно з PR dev -> main): запускаються тільки CI-перевірки.
+  - Push (merge) у гілку main: запускаються CI-перевірки без деплою.
+  - CD у production виконується тільки при створенні релізу з тегом формату vx.x.x (наприклад, v1.2.3).
+
 Шаблон для генерації (Ansible наразі вимкнено):
 
 name: App Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [ dev, main ]
   pull_request:
-    branches: [ main ]
+    branches: [ dev, main ]
+  release:
+    types: [ published ]
 
 jobs:
   deploy-dev:
-    if: github.ref == 'refs/heads/dev'
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev' || github.event_name == 'push' && github.ref == 'refs/heads/dev'
     uses: ВАША_ОРГАНІЗАЦІЯ/shared-workflows/.github/workflows/shared-ci-cd.yml@main
     with:
       environment_name: 'development'
-      deploy: ${{ github.event_name == 'push' }}
+      deploy: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
       use_ansible: false # Ansible поки що не використовуємо
       build_and_push_docker: true # Встановити true/false залежно від наявності Dockerfile у проєкті
       docker_image_name: '<назва_репозиторію>'
     secrets: inherit
 
   deploy-prod:
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request' && github.base_ref == 'main' || github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')
     uses: ВАША_ОРГАНІЗАЦІЯ/shared-workflows/.github/workflows/shared-ci-cd.yml@main
     with:
       environment_name: 'production'
-      deploy: ${{ github.event_name == 'push' }}
+      deploy: ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') }}
       use_ansible: false # Ansible поки що не використовуємо
       build_and_push_docker: true # Встановити true/false залежно від наявності Dockerfile у проєкті
       docker_image_name: '<назва_репозиторію>'
     secrets: inherit
+
+Примітка: для суворої перевірки саме формату vx.x.x варто додати regex-перевірку тега (наприклад, ^v[0-9]+\.[0-9]+\.[0-9]+$) у кроці валідації всередині пайплайну.
 
 
 Етап 5: Ручні дії та фіналізація

@@ -169,7 +169,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: ${{ github.event_name == 'push' }}
+          push: ${{ github.event_name == 'push' || github.event_name == 'release' }}
           tags: ghcr.io/${{ github.repository_owner }}/${{ inputs.docker_image_name }}:${{ github.sha }},ghcr.io/${{ github.repository_owner }}/${{ inputs.docker_image_name }}:latest
 
   cd-deploy:
@@ -177,8 +177,12 @@ jobs:
     needs: ci-checks
     if: |
       inputs.deploy == true &&
-      github.event_name == 'push' &&
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/dev' || startsWith(github.ref, 'refs/tags/v'))
+      (
+        (github.event_name == 'push' &&
+          (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/dev')) ||
+        (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')) ||
+        (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -234,7 +238,7 @@ jobs:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
           DEPLOY_PROJECT_DIR: ${{ secrets.DEPLOY_PROJECT_DIR }}
-          DEPLOY_REF: ${{ github.sha }}
+          DEPLOY_REF: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
         run: |
           set -euo pipefail
           target_path="${DEPLOY_PROJECT_DIR}"
