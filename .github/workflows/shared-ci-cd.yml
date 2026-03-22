@@ -91,10 +91,14 @@ jobs:
 
       - name: Run Gitleaks
         run: |
+          config_arg=""
+          if [[ -f ".gitleaks.toml" ]]; then
+            config_arg="--config=/repo/.gitleaks.toml"
+          fi
           docker run --rm \
             -v "${{ github.workspace }}:/repo" \
             zricethezav/gitleaks:latest \
-            detect --source=/repo --redact -v --exit-code=1
+            detect --source=/repo --redact -v --exit-code=1 $config_arg
 
       - name: Run Trivy filesystem scan
         uses: aquasecurity/trivy-action@0.35.0
