@@ -201,8 +201,6 @@ jobs:
 
       - name: Validate required secrets
         env:
-          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
           SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
@@ -210,7 +208,8 @@ jobs:
           DEPLOY_PROJECT_DIR: ${{ secrets.DEPLOY_PROJECT_DIR }}
         run: |
           set -euo pipefail
-          for key in TS_OAUTH_CLIENT_ID TS_OAUTH_SECRET SERVER_HOST SERVER_USER SERVER_SSH_KEY SSH_HOST_KEY_PUB DEPLOY_PROJECT_DIR; do
+          # TS_OAUTH_CLIENT_ID / TS_OAUTH_SECRET — org-level secrets, validated by Tailscale action itself
+          for key in SERVER_HOST SERVER_USER SERVER_SSH_KEY SSH_HOST_KEY_PUB DEPLOY_PROJECT_DIR; do
             if [[ -z "${!key:-}" ]]; then
               echo "ERROR: required secret is missing: $key"
               exit 1
