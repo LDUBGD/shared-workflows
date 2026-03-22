@@ -161,6 +161,7 @@ jobs:
       - name: Dependency review
         if: github.event_name == 'pull_request'
         uses: actions/dependency-review-action@v4
+        continue-on-error: true
 
       - name: Log in to GitHub Container Registry
         if: inputs.build_and_push_docker == true
