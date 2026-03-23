@@ -34,15 +34,15 @@ SSH_HOST_KEY_PUB
 
 ✅ /home/pinokew/Dspace/DSpace-docker
 
-/home/pinokew/Koha/koha-delpoy
+✅ /home/pinokew/Koha/koha-deploy
 
-/home/pinokew/Matomo-analytics
+✅ /home/pinokew/Matomo-analytics
 
-/home/pinokew/Traefik
+✅ /home/pinokew/Traefik
 
-/home/pinokew/victoriametrics-grafana
+✅ /home/pinokew/victoriametrics-grafana
 
-/home/pinokew/kdv-integrator/kdv-integrator-event
+✅ /home/pinokew/kdv-integrator/kdv-integrator-event
 
 /home/pinokew/Koha/koha-docker-build
 

@@ -23,6 +23,11 @@ on:
         required: false
         type: boolean
         default: false
+      push_docker_image:
+        description: 'Чи пушити Docker-образ навіть якщо deploy=false'
+        required: false
+        type: boolean
+        default: false
       docker_image_name:
         description: 'Назва Docker-образу (наприклад, my-app)'
         required: false
@@ -105,6 +110,15 @@ jobs:
             zricethezav/gitleaks:latest \
             detect --source=/repo --redact -v --exit-code=1 $config_arg
 
+      # Опціонально: repo-specific скрипт перевірки гігієни секретів
+      - name: Check secrets hygiene
+        if: hashFiles('scripts/check-secrets-hygiene.sh') != ''
+        run: bash ./scripts/check-secrets-hygiene.sh
+
+      - name: Dependency review
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+
       - name: Run Trivy filesystem scan
         uses: aquasecurity/trivy-action@0.35.0
         with:
@@ -160,11 +174,17 @@ jobs:
 
       # Опціонально: скрипт check-ports-policy.sh якщо він є в репо
       - name: Check ports policy
-        if: steps.compose.outputs.file != '' && hashFiles('scripts/check-ports-policy.sh') != ''
-        run: bash ./scripts/check-ports-policy.sh ${{ steps.compose.outputs.file }}
+        if: hashFiles('scripts/check-ports-policy.sh') != ''
+        run: |
+          set -euo pipefail
+          if [[ -n "${{ steps.compose.outputs.file }}" ]]; then
+            bash ./scripts/check-ports-policy.sh "${{ steps.compose.outputs.file }}"
+          else
+            bash ./scripts/check-ports-policy.sh
+          fi
 
       - name: Log in to GitHub Container Registry
-        if: inputs.build_and_push_docker == true
+        if: inputs.build_and_push_docker == true && (inputs.deploy || inputs.push_docker_image)
         uses: docker/login-action@v4.0.0
         with:
           registry: ghcr.io
@@ -176,7 +196,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          push: ${{ inputs.deploy }}
+          push: ${{ inputs.deploy || inputs.push_docker_image }}
           tags: ghcr.io/${{ github.repository_owner }}/${{ inputs.docker_image_name }}:${{ github.sha }},ghcr.io/${{ github.repository_owner }}/${{ inputs.docker_image_name }}:latest
 
   cd-deploy:
