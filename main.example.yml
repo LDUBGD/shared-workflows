@@ -3,7 +3,6 @@ name: App Pipeline
 on:
   push:
     branches: [ dev, main ]
-    tags: [ 'v*.*.*' ]
     paths-ignore:
       - '**/*.md'
       - '.env.example'
@@ -34,10 +33,9 @@ jobs:
       environment_name: development
       deploy: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
       use_ansible: false
-      build_and_push_docker: false
-      push_docker_image: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
-      docker_image_name: cloudflare-tunnel
-      orchestration_script_path: 'scripts/deploy-orchestrator.sh'
+      build_and_push_docker: true
+      docker_image_name: kdv-integrator-event
+      orchestration_script_path: 'scripts/healthcheck.sh'
     secrets:
       TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
       TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
@@ -53,17 +51,16 @@ jobs:
     if: |
       (github.event_name == 'pull_request' && github.base_ref == 'main') ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
       (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v'))
     uses: mzhk-repo/shared-workflows/.github/workflows/shared-ci-cd.yml@main
     with:
       environment_name: production
       deploy: ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') }}
       use_ansible: false
-      build_and_push_docker: false
-      push_docker_image: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
-      docker_image_name: cloudflare-tunnel
-      orchestration_script_path: 'scripts/deploy-orchestrator.sh'
+      build_and_push_docker: true
+      push_docker_image: ${{ github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v') }}
+      docker_image_name: kdv-integrator-event
+      orchestration_script_path: 'scripts/healthcheck.sh'
     secrets:
       TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
       TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
@@ -74,10 +71,3 @@ jobs:
       DEPLOY_PROJECT_DIR: ${{ secrets.DEPLOY_PROJECT_DIR }}
       GHCR_PULL_USERNAME: ${{ secrets.GHCR_PULL_USERNAME }}
       GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
-
-  # Примітка:
-  # - Локальні repo-specific скрипти не запускаються окремим job у локальному workflow.
-  # - Для цього використовується єдиний скрипт-оркестратор (за замовчуванням scripts/deploy-orchestrator.sh),
-  #   який викликається всередині shared-ci-cd.yml на етапі deploy, якщо файл існує.
-  # - Для image-only репозиторіїв можна вимкнути deploy (deploy: false) і окремо увімкнути пуш образу
-  #   через push_docker_image: true (або через умовний expression).
