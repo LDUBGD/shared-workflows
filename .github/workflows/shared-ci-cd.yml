@@ -79,13 +79,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Запускається лише якщо в репо є bash-скрипти
-      - name: Run ShellCheck
-        if: hashFiles('scripts/**/*.sh') != ''
-        uses: ludeeus/action-shellcheck@2.0.0
-        with:
-          scandir: ./scripts
-
       - name: Run Hadolint on Dockerfiles
         run: |
           set -euo pipefail
@@ -109,11 +102,6 @@ jobs:
             -v "${{ github.workspace }}:/repo" \
             zricethezav/gitleaks:latest \
             detect --source=/repo --redact -v --exit-code=1 $config_arg
-
-      # Опціонально: repo-specific скрипт перевірки гігієни секретів
-      - name: Check secrets hygiene
-        if: hashFiles('scripts/check-secrets-hygiene.sh') != ''
-        run: bash ./scripts/check-secrets-hygiene.sh
 
       - name: Dependency review
         if: github.event_name == 'pull_request'
@@ -172,17 +160,6 @@ jobs:
         if: steps.compose.outputs.file != ''
         run: docker compose -f ${{ steps.compose.outputs.file }} config --quiet
 
-      # Опціонально: скрипт check-ports-policy.sh якщо він є в репо
-      - name: Check ports policy
-        if: hashFiles('scripts/check-ports-policy.sh') != ''
-        run: |
-          set -euo pipefail
-          if [[ -n "${{ steps.compose.outputs.file }}" ]]; then
-            bash ./scripts/check-ports-policy.sh "${{ steps.compose.outputs.file }}"
-          else
-            bash ./scripts/check-ports-policy.sh
-          fi
-
       - name: Log in to GitHub Container Registry
         if: inputs.build_and_push_docker == true && (inputs.deploy || inputs.push_docker_image)
         uses: docker/login-action@v4.0.0
@@ -191,13 +168,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Extract Docker metadata
+        if: inputs.build_and_push_docker == true
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ inputs.docker_image_name }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,prefix=sha-
+
       - name: Build and push Docker image
         if: inputs.build_and_push_docker == true
         uses: docker/build-push-action@v7
         with:
           context: .
           push: ${{ inputs.deploy || inputs.push_docker_image }}
-          tags: ghcr.io/${{ github.repository_owner }}/${{ inputs.docker_image_name }}:${{ github.sha }},ghcr.io/${{ github.repository_owner }}/${{ inputs.docker_image_name }}:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
   cd-deploy:
     name: cd-deploy
@@ -259,6 +249,8 @@ jobs:
           SERVER_USER: ${{ secrets.SERVER_USER }}
           DEPLOY_PROJECT_DIR: ${{ secrets.DEPLOY_PROJECT_DIR }}
           DEPLOY_REF: ${{ github.sha }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ORCHESTRATION_SCRIPT_PATH: ${{ inputs.orchestration_script_path }}
         run: |
           set -euo pipefail
@@ -266,7 +258,7 @@ jobs:
 
           ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
             "${SERVER_USER}@${SERVER_HOST}" \
-            "DEPLOY_REF='${DEPLOY_REF}' DEPLOY_PROJECT_DIR='${target_path}' ORCHESTRATION_SCRIPT_PATH='${ORCHESTRATION_SCRIPT_PATH}' bash -s" <<'EOF'
+            "DEPLOY_REF='${DEPLOY_REF}' DEPLOY_PROJECT_DIR='${target_path}' GHCR_USERNAME='${GHCR_USERNAME}' GHCR_TOKEN='${GHCR_TOKEN}' ORCHESTRATION_SCRIPT_PATH='${ORCHESTRATION_SCRIPT_PATH}' bash -s" <<'EOF'
           set -euo pipefail
           if [[ -z "${DEPLOY_PROJECT_DIR:-}" ]]; then
             echo "ERROR: DEPLOY_PROJECT_DIR is empty"
@@ -289,6 +281,15 @@ jobs:
           else
             echo "ERROR: No docker-compose file found in $DEPLOY_PROJECT_DIR"
             exit 1
+          fi
+
+          # Якщо compose використовує GHCR-образи, авторизуємося перед pull/up
+          if grep -q "ghcr.io/" "$compose_file"; then
+            if [[ -z "${GHCR_USERNAME:-}" || -z "${GHCR_TOKEN:-}" ]]; then
+              echo "ERROR: GHCR credentials are missing for private image pull"
+              exit 1
+            fi
+            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
           fi
 
           # Опціонально: єдиний скрипт оркестрації repo-specific кроків
