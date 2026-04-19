@@ -336,19 +336,28 @@ jobs:
           ENVIRONMENT_NAME: ${{ inputs.environment_name }}
           ORCHESTRATION_SCRIPT_PATH: ${{ inputs.orchestration_script_path }}
           INFRA_REPO_PATH: ${{ inputs.infra_repo_path }}
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
         run: |
           set -euo pipefail
           ssh_port="${SERVER_SSH_PORT:-22}"
+          local_sops_key_file="/tmp/sops-age-key.remote"
+          printf '%s\n' "${SOPS_AGE_KEY}" | tr -d '\r' > "${local_sops_key_file}"
+          chmod 600 "${local_sops_key_file}"
+          trap 'shred -u "${local_sops_key_file}" 2>/dev/null || rm -f "${local_sops_key_file}"' EXIT
 
           scp -P "${ssh_port}" -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
             /tmp/env.decrypted \
             "${SERVER_USER}@${SERVER_HOST}:/tmp/env.decrypted"
 
+          scp -P "${ssh_port}" -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
+            "${local_sops_key_file}" \
+            "${SERVER_USER}@${SERVER_HOST}:/tmp/sops-age-key.txt"
+
           ssh -p "${ssh_port}" -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
             "${SERVER_USER}@${SERVER_HOST}" \
             "DEPLOY_REF='${DEPLOY_REF}' DEPLOY_PROJECT_DIR='${DEPLOY_PROJECT_DIR}' ENVIRONMENT_NAME='${ENVIRONMENT_NAME}' ORCHESTRATION_SCRIPT_PATH='${ORCHESTRATION_SCRIPT_PATH}' INFRA_REPO_PATH='${INFRA_REPO_PATH}' bash -s" <<'EOF'
           set -euo pipefail
-          trap 'rm -f /tmp/env.decrypted /tmp/deploy-manifest.yml' EXIT
+          trap 'rm -f /tmp/env.decrypted /tmp/deploy-manifest.yml /tmp/sops-age-key.txt' EXIT
 
           if [[ -z "${DEPLOY_PROJECT_DIR:-}" ]]; then
             echo "ERROR: DEPLOY_PROJECT_DIR is empty"
@@ -374,6 +383,7 @@ jobs:
             ORCHESTRATOR_ENV_FILE=/tmp/env.decrypted \
             ENVIRONMENT_NAME="${ENVIRONMENT_NAME}" \
             INFRA_REPO_PATH="${INFRA_REPO_PATH}" \
+            SOPS_AGE_KEY="$(cat /tmp/sops-age-key.txt)" \
             bash "${ORCHESTRATION_SCRIPT_PATH}"
           else
             echo "No orchestration script found at '${ORCHESTRATION_SCRIPT_PATH:-}', fallback to default swarm deploy"
