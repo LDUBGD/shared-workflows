@@ -1,0 +1,143 @@
+name: Shared Code Delivery
+
+on:
+  workflow_call:
+    inputs:
+      environment_name:
+        description: 'Назва GitHub Environment для доставки коду'
+        required: false
+        type: string
+        default: 'development'
+      deploy:
+        description: 'Чи виконувати доставку коду на remote host'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      TS_OAUTH_CLIENT_ID:
+        required: false
+      TS_OAUTH_SECRET:
+        required: false
+      SERVER_HOST:
+        required: true
+      SERVER_USER:
+        required: true
+      SERVER_SSH_KEY:
+        required: true
+      SERVER_SSH_PORT:
+        required: false
+      SSH_HOST_KEY_PUB:
+        required: true
+      DEPLOY_PROJECT_DIR:
+        required: true
+      INFRA_REPO_PAT:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  deliver-code:
+    name: deliver-code
+    if: inputs.deploy == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: code-delivery-${{ inputs.environment_name }}
+      cancel-in-progress: false
+    environment: ${{ inputs.environment_name }}
+    env:
+      TS_OAUTH_CLIENT_ID_VALUE: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+      TS_OAUTH_SECRET_VALUE: ${{ secrets.TS_OAUTH_SECRET }}
+    steps:
+      - name: Validate required secrets
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SSH_HOST_KEY_PUB: ${{ secrets.SSH_HOST_KEY_PUB }}
+          DEPLOY_PROJECT_DIR: ${{ secrets.DEPLOY_PROJECT_DIR }}
+        run: |
+          set -euo pipefail
+          for key in SERVER_HOST SERVER_USER SERVER_SSH_KEY SSH_HOST_KEY_PUB DEPLOY_PROJECT_DIR; do
+            if [[ -z "${!key:-}" ]]; then
+              echo "ERROR: required secret is missing: $key"
+              exit 1
+            fi
+          done
+
+      - name: Configure SSH key and known_hosts
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_SSH_PORT: ${{ secrets.SERVER_SSH_PORT }}
+          SSH_HOST_KEY_PUB: ${{ secrets.SSH_HOST_KEY_PUB }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          umask 177
+          ssh_port="${SERVER_SSH_PORT:-22}"
+          printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/id_ed25519
+          if [[ "${ssh_port}" == "22" ]]; then
+            printf '%s %s\n' "$SERVER_HOST" "$SSH_HOST_KEY_PUB" > ~/.ssh/known_hosts
+          else
+            printf '[%s]:%s %s\n' "$SERVER_HOST" "$ssh_port" "$SSH_HOST_KEY_PUB" > ~/.ssh/known_hosts
+          fi
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+      - name: Connect to Tailscale
+        if: env.TS_OAUTH_CLIENT_ID_VALUE != '' && env.TS_OAUTH_SECRET_VALUE != ''
+        uses: tailscale/github-action@v4.1.2
+        with:
+          oauth-client-id: ${{ env.TS_OAUTH_CLIENT_ID_VALUE }}
+          oauth-secret: ${{ env.TS_OAUTH_SECRET_VALUE }}
+          tags: tag:ci
+
+      - name: Deliver code on remote host
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_SSH_PORT: ${{ secrets.SERVER_SSH_PORT }}
+          DEPLOY_PROJECT_DIR: ${{ secrets.DEPLOY_PROJECT_DIR }}
+          DEPLOY_REF: ${{ github.sha }}
+          GITHUB_REPOSITORY_NAME: ${{ github.repository }}
+          GITHUB_SERVER_URL_VALUE: ${{ github.server_url }}
+          INFRA_REPO_PAT: ${{ secrets.INFRA_REPO_PAT }}
+        run: |
+          set -euo pipefail
+          ssh_port="${SERVER_SSH_PORT:-22}"
+
+          ssh -p "${ssh_port}" -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
+            "${SERVER_USER}@${SERVER_HOST}" \
+            "DEPLOY_REF='${DEPLOY_REF}' DEPLOY_PROJECT_DIR='${DEPLOY_PROJECT_DIR}' GITHUB_REPOSITORY_NAME='${GITHUB_REPOSITORY_NAME}' GITHUB_SERVER_URL_VALUE='${GITHUB_SERVER_URL_VALUE}' INFRA_REPO_PAT='${INFRA_REPO_PAT}' bash -s" <<'EOF'
+          set -euo pipefail
+
+          if [[ -z "${DEPLOY_PROJECT_DIR:-}" ]]; then
+            echo "ERROR: DEPLOY_PROJECT_DIR is empty"
+            exit 1
+          fi
+          if [[ ! -d "${DEPLOY_PROJECT_DIR}/.git" ]]; then
+            echo "ERROR: DEPLOY_PROJECT_DIR is not a git repository: ${DEPLOY_PROJECT_DIR}"
+            exit 1
+          fi
+
+          cd "${DEPLOY_PROJECT_DIR}"
+          if [[ -n "${INFRA_REPO_PAT:-}" ]]; then
+            askpass_file="$(mktemp)"
+            trap 'rm -f "${askpass_file}"' EXIT
+            chmod 700 "${askpass_file}"
+            cat > "${askpass_file}" <<'ASKPASS'
+          #!/usr/bin/env sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) printf '%s\n' "${INFRA_REPO_PAT}" ;;
+            *) printf '\n' ;;
+          esac
+          ASKPASS
+            GIT_ASKPASS="${askpass_file}" GIT_TERMINAL_PROMPT=0 git fetch origin --prune
+          else
+            git fetch origin --prune
+          fi
+          git checkout --detach "${DEPLOY_REF}"
+          git status --short
+          EOF
