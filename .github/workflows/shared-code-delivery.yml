@@ -31,7 +31,7 @@ on:
       DEPLOY_PROJECT_DIR:
         required: true
       INFRA_REPO_PAT:
-        required: false
+        required: true
 
 permissions:
   contents: read
@@ -57,9 +57,10 @@ jobs:
           SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
           SSH_HOST_KEY_PUB: ${{ secrets.SSH_HOST_KEY_PUB }}
           DEPLOY_PROJECT_DIR: ${{ secrets.DEPLOY_PROJECT_DIR }}
+          INFRA_REPO_PAT: ${{ secrets.INFRA_REPO_PAT }}
         run: |
           set -euo pipefail
-          for key in SERVER_HOST SERVER_USER SERVER_SSH_KEY SSH_HOST_KEY_PUB DEPLOY_PROJECT_DIR; do
+          for key in SERVER_HOST SERVER_USER SERVER_SSH_KEY SSH_HOST_KEY_PUB DEPLOY_PROJECT_DIR INFRA_REPO_PAT; do
             if [[ -z "${!key:-}" ]]; then
               echo "ERROR: required secret is missing: $key"
               exit 1
@@ -122,13 +123,16 @@ jobs:
           fi
 
           cd "${DEPLOY_PROJECT_DIR}"
-          if [[ -n "${INFRA_REPO_PAT:-}" ]]; then
-            auth_header="$(printf 'x-access-token:%s' "${INFRA_REPO_PAT}" | base64 | tr -d '\n')"
-            git -c "http.${GITHUB_SERVER_URL_VALUE}/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-              fetch "${GITHUB_SERVER_URL_VALUE}/${GITHUB_REPOSITORY_NAME}.git" --prune
-          else
-            git fetch origin --prune
+          if [[ -z "${INFRA_REPO_PAT:-}" ]]; then
+            echo "ERROR: INFRA_REPO_PAT is required for private repository delivery"
+            echo "HINT: add INFRA_REPO_PAT as a repository or environment secret with Contents: Read access to ${GITHUB_REPOSITORY_NAME}"
+            exit 1
           fi
+          auth_header="$(printf 'x-access-token:%s' "${INFRA_REPO_PAT}" | base64 | tr -d '\n')"
+          git -c "http.${GITHUB_SERVER_URL_VALUE}/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            fetch --prune "${GITHUB_SERVER_URL_VALUE}/${GITHUB_REPOSITORY_NAME}.git" \
+            '+refs/heads/*:refs/remotes/origin/*' \
+            '+refs/tags/*:refs/tags/*'
           git checkout --detach "${DEPLOY_REF}"
           git status --short
           EOF

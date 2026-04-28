@@ -234,3 +234,11 @@
 - **Verification:** `yaml.safe_load` успішно парсить `/opt/shared-workflows/.github/workflows/shared-code-delivery.yml` (`YAML_OK`); `git diff --check` проходить без whitespace-помилок.
 - **Risks:** `INFRA_REPO_PAT` має мати доступ на читання до `mzhk-repo/ansible`; для fine-grained PAT потрібні repo access + `Contents: Read`.
 - **Rollback:** Повернути попередній блок `GIT_ASKPASS` у `shared-code-delivery.yml`.
+
+## 2026-04-28 — Phase 8 hotfix (`/opt/shared-workflows`): прибрано fallback на `origin` у private repo delivery
+
+- **Context:** Після першого hotfix GitHub Actions продовжив падати з ідентичним `403`, що означало fallback на remote `origin` при порожньому/недоступному `INFRA_REPO_PAT` або неявне використання старих credentials.
+- **Change:** У `/opt/shared-workflows/.github/workflows/shared-code-delivery.yml` `INFRA_REPO_PAT` зроблено required secret; валідацію secrets доповнено fail-fast перевіркою `INFRA_REPO_PAT`; remote block більше не виконує `git fetch origin`, а завжди fetch-ить приватний repo через explicit PAT header і refspec для heads/tags.
+- **Verification:** `yaml.safe_load` успішно парсить `/opt/shared-workflows/.github/workflows/shared-code-delivery.yml` (`YAML_OK`); `git diff --check` проходить без whitespace-помилок.
+- **Risks:** Якщо `INFRA_REPO_PAT` не заданий або не видимий для environment/job, workflow тепер зупиниться раніше з явною помилкою; якщо PAT заданий, але не має `Contents: Read` до `mzhk-repo/ansible`, GitHub все ще поверне `403`.
+- **Rollback:** Повернути `INFRA_REPO_PAT` до optional і відновити fallback `git fetch origin`.
