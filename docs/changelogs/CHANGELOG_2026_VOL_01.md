@@ -226,3 +226,11 @@
 - **Verification:** `yaml.safe_load` успішно парсить `/opt/shared-workflows/.github/workflows/shared-code-delivery.yml` і `/opt/Ansible/.github/workflows/main.yml` (`YAML_OK`).
 - **Risks:** На remote host `DEPLOY_PROJECT_DIR` має вже бути git repo з коректним `origin`; для приватного repo потрібен валідний `INFRA_REPO_PAT` або вже налаштований доступ на самому хості.
 - **Rollback:** Видалити `/opt/shared-workflows/.github/workflows/shared-code-delivery.yml` і повернути попередній `/opt/Ansible/.github/workflows/main.yml`.
+
+## 2026-04-28 — Phase 8 hotfix (`/opt/shared-workflows`): `shared-code-delivery` fetch з приватного GitHub repo через explicit PAT header
+
+- **Context:** Delivery job для `/opt/Ansible` впав на remote `git fetch` з `remote: Write access to repository not granted` / `403`, бо Git міг використовувати credentials із remote `origin`, а не `INFRA_REPO_PAT` через `GIT_ASKPASS`.
+- **Change:** У `/opt/shared-workflows/.github/workflows/shared-code-delivery.yml` замінено `GIT_ASKPASS git fetch origin` на одноразовий `git fetch` з canonical URL `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git` і `http.extraheader=AUTHORIZATION: basic ...`, сформованим з `INFRA_REPO_PAT`; remote `origin` не змінюється, токен не записується в git config.
+- **Verification:** `yaml.safe_load` успішно парсить `/opt/shared-workflows/.github/workflows/shared-code-delivery.yml` (`YAML_OK`); `git diff --check` проходить без whitespace-помилок.
+- **Risks:** `INFRA_REPO_PAT` має мати доступ на читання до `mzhk-repo/ansible`; для fine-grained PAT потрібні repo access + `Contents: Read`.
+- **Rollback:** Повернути попередній блок `GIT_ASKPASS` у `shared-code-delivery.yml`.

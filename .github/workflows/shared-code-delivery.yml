@@ -123,18 +123,9 @@ jobs:
 
           cd "${DEPLOY_PROJECT_DIR}"
           if [[ -n "${INFRA_REPO_PAT:-}" ]]; then
-            askpass_file="$(mktemp)"
-            trap 'rm -f "${askpass_file}"' EXIT
-            chmod 700 "${askpass_file}"
-            cat > "${askpass_file}" <<'ASKPASS'
-          #!/usr/bin/env sh
-          case "$1" in
-            *Username*) printf '%s\n' 'x-access-token' ;;
-            *Password*) printf '%s\n' "${INFRA_REPO_PAT}" ;;
-            *) printf '\n' ;;
-          esac
-          ASKPASS
-            GIT_ASKPASS="${askpass_file}" GIT_TERMINAL_PROMPT=0 git fetch origin --prune
+            auth_header="$(printf 'x-access-token:%s' "${INFRA_REPO_PAT}" | base64 | tr -d '\n')"
+            git -c "http.${GITHUB_SERVER_URL_VALUE}/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch "${GITHUB_SERVER_URL_VALUE}/${GITHUB_REPOSITORY_NAME}.git" --prune
           else
             git fetch origin --prune
           fi
