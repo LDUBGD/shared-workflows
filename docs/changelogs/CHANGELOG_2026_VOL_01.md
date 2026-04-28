@@ -242,3 +242,11 @@
 - **Verification:** `yaml.safe_load` успішно парсить `/opt/shared-workflows/.github/workflows/shared-code-delivery.yml` (`YAML_OK`); `git diff --check` проходить без whitespace-помилок.
 - **Risks:** Якщо `INFRA_REPO_PAT` не заданий або не видимий для environment/job, workflow тепер зупиниться раніше з явною помилкою; якщо PAT заданий, але не має `Contents: Read` до `mzhk-repo/ansible`, GitHub все ще поверне `403`.
 - **Rollback:** Повернути `INFRA_REPO_PAT` до optional і відновити fallback `git fetch origin`.
+
+## 2026-04-28 — Phase 8 hotfix (`/opt/shared-workflows`): private repo delivery переведено з remote GitHub fetch на git bundle
+
+- **Context:** Після push змін у `shared-workflows@main` GitHub Actions все ще показував `403` на `https://github.com/mzhk-repo/ansible.git`, тобто будь-який remote fetch із manager host лишався залежним від GitHub credentials/PAT на віддаленому боці.
+- **Change:** У `/opt/shared-workflows/.github/workflows/shared-code-delivery.yml` delivery-flow переведено на модель `actions/checkout` на runner -> `git bundle create HEAD` -> `scp` bundle на remote host -> `git fetch` з локального bundle-файлу -> `git checkout --detach ${DEPLOY_REF}`. `INFRA_REPO_PAT` знову optional, бо private repo читається runner-ом через стандартний GitHub Actions token; remote host більше не звертається до GitHub.
+- **Verification:** `yaml.safe_load` успішно парсить `/opt/shared-workflows/.github/workflows/shared-code-delivery.yml` (`YAML_OK`); `git diff --check` проходить без whitespace-помилок.
+- **Risks:** На remote host потрібні `git`, `scp`/SSH доступ і права на запис у `/tmp` для тимчасового bundle; bundle видаляється через `trap` після remote delivery.
+- **Rollback:** Повернути попередній remote `git fetch` через GitHub URL і `INFRA_REPO_PAT`.

@@ -31,7 +31,7 @@ on:
       DEPLOY_PROJECT_DIR:
         required: true
       INFRA_REPO_PAT:
-        required: true
+        required: false
 
 permissions:
   contents: read
@@ -49,7 +49,18 @@ jobs:
     env:
       TS_OAUTH_CLIENT_ID_VALUE: ${{ secrets.TS_OAUTH_CLIENT_ID }}
       TS_OAUTH_SECRET_VALUE: ${{ secrets.TS_OAUTH_SECRET }}
+      DELIVERY_BUNDLE_PATH: /tmp/repo-delivery.bundle
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Create delivery bundle
+        run: |
+          set -euo pipefail
+          git bundle create "${DELIVERY_BUNDLE_PATH}" HEAD
+
       - name: Validate required secrets
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
@@ -57,10 +68,9 @@ jobs:
           SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
           SSH_HOST_KEY_PUB: ${{ secrets.SSH_HOST_KEY_PUB }}
           DEPLOY_PROJECT_DIR: ${{ secrets.DEPLOY_PROJECT_DIR }}
-          INFRA_REPO_PAT: ${{ secrets.INFRA_REPO_PAT }}
         run: |
           set -euo pipefail
-          for key in SERVER_HOST SERVER_USER SERVER_SSH_KEY SSH_HOST_KEY_PUB DEPLOY_PROJECT_DIR INFRA_REPO_PAT; do
+          for key in SERVER_HOST SERVER_USER SERVER_SSH_KEY SSH_HOST_KEY_PUB DEPLOY_PROJECT_DIR; do
             if [[ -z "${!key:-}" ]]; then
               echo "ERROR: required secret is missing: $key"
               exit 1
@@ -94,6 +104,17 @@ jobs:
           oauth-secret: ${{ env.TS_OAUTH_SECRET_VALUE }}
           tags: tag:ci
 
+      - name: Upload delivery bundle
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_SSH_PORT: ${{ secrets.SERVER_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          ssh_port="${SERVER_SSH_PORT:-22}"
+          scp -P "${ssh_port}" -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
+            "${DELIVERY_BUNDLE_PATH}" "${SERVER_USER}@${SERVER_HOST}:/tmp/repo-delivery-${{ github.run_id }}-${{ github.run_attempt }}.bundle"
+
       - name: Deliver code on remote host
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
@@ -101,17 +122,16 @@ jobs:
           SERVER_SSH_PORT: ${{ secrets.SERVER_SSH_PORT }}
           DEPLOY_PROJECT_DIR: ${{ secrets.DEPLOY_PROJECT_DIR }}
           DEPLOY_REF: ${{ github.sha }}
-          GITHUB_REPOSITORY_NAME: ${{ github.repository }}
-          GITHUB_SERVER_URL_VALUE: ${{ github.server_url }}
-          INFRA_REPO_PAT: ${{ secrets.INFRA_REPO_PAT }}
+          DELIVERY_REMOTE_BUNDLE: /tmp/repo-delivery-${{ github.run_id }}-${{ github.run_attempt }}.bundle
         run: |
           set -euo pipefail
           ssh_port="${SERVER_SSH_PORT:-22}"
 
           ssh -p "${ssh_port}" -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
             "${SERVER_USER}@${SERVER_HOST}" \
-            "DEPLOY_REF='${DEPLOY_REF}' DEPLOY_PROJECT_DIR='${DEPLOY_PROJECT_DIR}' GITHUB_REPOSITORY_NAME='${GITHUB_REPOSITORY_NAME}' GITHUB_SERVER_URL_VALUE='${GITHUB_SERVER_URL_VALUE}' INFRA_REPO_PAT='${INFRA_REPO_PAT}' bash -s" <<'EOF'
+            "DEPLOY_REF='${DEPLOY_REF}' DEPLOY_PROJECT_DIR='${DEPLOY_PROJECT_DIR}' DELIVERY_REMOTE_BUNDLE='${DELIVERY_REMOTE_BUNDLE}' bash -s" <<'EOF'
           set -euo pipefail
+          trap 'rm -f "${DELIVERY_REMOTE_BUNDLE:-}"' EXIT
 
           if [[ -z "${DEPLOY_PROJECT_DIR:-}" ]]; then
             echo "ERROR: DEPLOY_PROJECT_DIR is empty"
@@ -123,16 +143,12 @@ jobs:
           fi
 
           cd "${DEPLOY_PROJECT_DIR}"
-          if [[ -z "${INFRA_REPO_PAT:-}" ]]; then
-            echo "ERROR: INFRA_REPO_PAT is required for private repository delivery"
-            echo "HINT: add INFRA_REPO_PAT as a repository or environment secret with Contents: Read access to ${GITHUB_REPOSITORY_NAME}"
+          if [[ -z "${DELIVERY_REMOTE_BUNDLE:-}" || ! -f "${DELIVERY_REMOTE_BUNDLE}" ]]; then
+            echo "ERROR: delivery bundle is missing on remote host"
             exit 1
           fi
-          auth_header="$(printf 'x-access-token:%s' "${INFRA_REPO_PAT}" | base64 | tr -d '\n')"
-          git -c "http.${GITHUB_SERVER_URL_VALUE}/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-            fetch --prune "${GITHUB_SERVER_URL_VALUE}/${GITHUB_REPOSITORY_NAME}.git" \
-            '+refs/heads/*:refs/remotes/origin/*' \
-            '+refs/tags/*:refs/tags/*'
+          echo "Running shared-code-delivery bundle mode"
+          git fetch --force "${DELIVERY_REMOTE_BUNDLE}" HEAD:refs/remotes/origin/delivery
           git checkout --detach "${DEPLOY_REF}"
           git status --short
           EOF
