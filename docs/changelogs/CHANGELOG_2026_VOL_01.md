@@ -265,4 +265,4 @@
 - **Change:** У remote deploy-блоці `/opt/shared-workflows/.github/workflows/shared-ci-cd-swarm.yml` додано helper `run_repo_git()`: якщо deploy-користувач має write-права на repo і `.git`, Git виконується напряму; якщо ні, workflow визначає UID власника repo (`stat -c '%u'`) і запускає `git fetch --all --prune` та `git checkout ${DEPLOY_REF}` через `sudo -n -u "#<repo_owner_uid>"`. Якщо passwordless sudo недоступний, job зупиняється з явним поясненням.
 - **Verification:** `yaml.safe_load` успішно парсить `/opt/shared-workflows/.github/workflows/shared-ci-cd-swarm.yml` (`YAML_OK`); `git diff --check` проходить без whitespace-помилок.
 - **Risks:** Для repo з іншим owner потрібне passwordless sudo для deploy-користувача на виконання git від імені власника repo; workflow не змінює ownership/chmod/ACL автоматично.
-- **Rollback:** Прибрати `run_repo_git()` і повернути прямі `git fetch`/`git checkout` від deploy-користувача.
+- **Rollback:** Прибрати `run_repo_git()` і повернути прямі `git fetch`/`git checkout` від deploy-користувача..
