@@ -250,3 +250,11 @@
 - **Verification:** `yaml.safe_load` успішно парсить `/opt/shared-workflows/.github/workflows/shared-code-delivery.yml` (`YAML_OK`); `git diff --check` проходить без whitespace-помилок.
 - **Risks:** На remote host потрібні `git`, `scp`/SSH доступ і права на запис у `/tmp` для тимчасового bundle; bundle видаляється через `trap` після remote delivery.
 - **Rollback:** Повернути попередній remote `git fetch` через GitHub URL і `INFRA_REPO_PAT`.
+
+## 2026-04-29 — Phase 8 hotfix (`/opt/shared-workflows`): додано `safe.directory` guard у Swarm/SOPS remote deploy
+
+- **Context:** GitHub Actions deploy через `/opt/shared-workflows/.github/workflows/shared-ci-cd-swarm.yml` впав на remote `git fetch` з `fatal: detected dubious ownership in repository`, коли deploy-користувач не був власником директорії repo.
+- **Change:** У remote deploy-блоці `shared-ci-cd-swarm.yml` перед `cd "${DEPLOY_PROJECT_DIR}"` і `git fetch --all --prune` додано ідемпотентну перевірку `git config --global --get-all safe.directory`; якщо шлях відсутній, workflow додає `git config --global --add safe.directory "${DEPLOY_PROJECT_DIR}"`.
+- **Verification:** `yaml.safe_load` успішно парсить `/opt/shared-workflows/.github/workflows/shared-ci-cd-swarm.yml` (`YAML_OK`); `git diff --check` проходить без whitespace-помилок.
+- **Risks:** Налаштування додається у global git config deploy-користувача на remote host; воно дозволяє Git працювати саме з `DEPLOY_PROJECT_DIR`, але не змінює ownership або filesystem permissions.
+- **Rollback:** Прибрати блок `safe.directory` з `shared-ci-cd-swarm.yml`; за потреби вручну видалити запис із global git config deploy-користувача.

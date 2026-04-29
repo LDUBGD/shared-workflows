@@ -372,6 +372,10 @@ jobs:
             exit 1
           fi
 
+          if ! git config --global --get-all safe.directory 2>/dev/null | grep -Fxq "${DEPLOY_PROJECT_DIR}"; then
+            git config --global --add safe.directory "${DEPLOY_PROJECT_DIR}"
+          fi
+
           cd "${DEPLOY_PROJECT_DIR}"
           git fetch --all --prune
           git checkout "${DEPLOY_REF}"
