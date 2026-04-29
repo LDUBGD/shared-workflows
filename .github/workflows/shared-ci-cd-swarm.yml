@@ -376,9 +376,31 @@ jobs:
             git config --global --add safe.directory "${DEPLOY_PROJECT_DIR}"
           fi
 
+          run_repo_git() {
+            if [[ -w "${DEPLOY_PROJECT_DIR}" && -w "${DEPLOY_PROJECT_DIR}/.git" ]]; then
+              git -C "${DEPLOY_PROJECT_DIR}" "$@"
+              return
+            fi
+
+            repo_owner_uid="$(stat -c '%u' "${DEPLOY_PROJECT_DIR}")"
+            if ! command -v sudo >/dev/null 2>&1; then
+              echo "ERROR: deploy user cannot write to ${DEPLOY_PROJECT_DIR} or .git, and sudo is not available"
+              exit 1
+            fi
+            if ! sudo -n -u "#${repo_owner_uid}" test -w "${DEPLOY_PROJECT_DIR}" ||
+               ! sudo -n -u "#${repo_owner_uid}" test -w "${DEPLOY_PROJECT_DIR}/.git"; then
+              echo "ERROR: deploy user cannot write to repo and cannot run git as repo owner via passwordless sudo"
+              echo "HINT: allow passwordless sudo for git operations as repo owner, or fix ownership/ACL for ${DEPLOY_PROJECT_DIR}"
+              exit 1
+            fi
+
+            sudo -n -u "#${repo_owner_uid}" git -C "${DEPLOY_PROJECT_DIR}" "$@"
+          }
+
+          run_repo_git fetch --all --prune
+          run_repo_git checkout "${DEPLOY_REF}"
+
           cd "${DEPLOY_PROJECT_DIR}"
-          git fetch --all --prune
-          git checkout "${DEPLOY_REF}"
 
           if [[ -n "${ORCHESTRATION_SCRIPT_PATH:-}" && -f "${ORCHESTRATION_SCRIPT_PATH}" ]]; then
             chmod +x "${ORCHESTRATION_SCRIPT_PATH}" || true

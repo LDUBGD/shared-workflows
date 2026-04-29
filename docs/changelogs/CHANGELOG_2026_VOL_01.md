@@ -258,3 +258,11 @@
 - **Verification:** `yaml.safe_load` успішно парсить `/opt/shared-workflows/.github/workflows/shared-ci-cd-swarm.yml` (`YAML_OK`); `git diff --check` проходить без whitespace-помилок.
 - **Risks:** Налаштування додається у global git config deploy-користувача на remote host; воно дозволяє Git працювати саме з `DEPLOY_PROJECT_DIR`, але не змінює ownership або filesystem permissions.
 - **Rollback:** Прибрати блок `safe.directory` з `shared-ci-cd-swarm.yml`; за потреби вручну видалити запис із global git config deploy-користувача.
+
+## 2026-04-29 — Phase 8 hotfix (`/opt/shared-workflows`): git update у Swarm/SOPS deploy виконується від repo owner при відсутніх write-правах
+
+- **Context:** Після `safe.directory` guard deploy дійшов до реальної файлової помилки: `error: cannot open '.git/FETCH_HEAD': Permission denied`, бо deploy-користувач не мав write-доступу до `.git`.
+- **Change:** У remote deploy-блоці `/opt/shared-workflows/.github/workflows/shared-ci-cd-swarm.yml` додано helper `run_repo_git()`: якщо deploy-користувач має write-права на repo і `.git`, Git виконується напряму; якщо ні, workflow визначає UID власника repo (`stat -c '%u'`) і запускає `git fetch --all --prune` та `git checkout ${DEPLOY_REF}` через `sudo -n -u "#<repo_owner_uid>"`. Якщо passwordless sudo недоступний, job зупиняється з явним поясненням.
+- **Verification:** `yaml.safe_load` успішно парсить `/opt/shared-workflows/.github/workflows/shared-ci-cd-swarm.yml` (`YAML_OK`); `git diff --check` проходить без whitespace-помилок.
+- **Risks:** Для repo з іншим owner потрібне passwordless sudo для deploy-користувача на виконання git від імені власника repo; workflow не змінює ownership/chmod/ACL автоматично.
+- **Rollback:** Прибрати `run_repo_git()` і повернути прямі `git fetch`/`git checkout` від deploy-користувача.
